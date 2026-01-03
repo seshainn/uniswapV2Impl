@@ -27,20 +27,25 @@ contract UniswapV2SwapTest is Test {
     address private constant user = address(100);
 
     function setUp() public {
-        //fund weth to user
+        //give 100 eth to user
         deal(user, 100 * 1e18);
         vm.startPrank(user);
+        //convert eth to weth
         weth.deposit{value: 100 * 1e18}();
+        //approve router to spend upto max weth from user
         IERC20(address(weth)).approve(address(router), type(uint256).max);
         vm.stopPrank();
 
-        //fund DAI to user
+        //give dai to user
         deal(constants.DAI, user, 1000000 * 1e18);
         vm.startPrank(user);
+        //aprove router to spend upto max dai from user
         dai.approve(address(router), type(uint256).max);
         vm.stopPrank();
     }
-
+    // getAmountsOut() returns the estimated output token amounts for a given input token amount and swap path,
+    // based on the current Uniswap V2 pool reserves.
+    // The last value in the returned array is the final output amount.
     function test_getAmountsOut() public {
         address[] memory path = new address[](3);
         path[0] = constants.WETH;
@@ -52,6 +57,9 @@ contract UniswapV2SwapTest is Test {
         console2.log("DAI", amounts[1]);
         console2.log("MKR", amounts[2]);
     }
+    // getAmountsIn() returns the estimated input token amounts needed for a given output token amount and swap path,
+    // based on the current Uniswap V2 pool reserves.
+    // The first value in the returned array is the required input amount.
     function test_getAmountsIn() public {
         address[] memory path = new address[](3);
         path[0] = constants.WETH;
@@ -63,7 +71,10 @@ contract UniswapV2SwapTest is Test {
         console2.log("DAI", amounts[1]);
         console2.log("MKR", amounts[2]);
     }
-
+    //swapExactTokensForTokens(): swaps exact amount of input token (amountIn) for at least amountOutMin of the final output token,
+    //along the specified swap path. The user receives only the final output token.
+    //The function returns an array of actual amounts used at each hop.
+    //deadline is a transaction expiry time (Unix timestamp). e.g. deadline = block.timestamp + 300; // valid for 5 minutes
     function test_swapExactTokensForTokens() public {
         address[] memory path = new address[](3);
         path[0] = constants.WETH;
@@ -84,6 +95,10 @@ contract UniswapV2SwapTest is Test {
         console2.log("MKR", amounts[2]);
         assertGe(mkr.balanceOf(user), amountOutMin, "MKR balance of User");
     }
+    //swapTokensForExactTokens(): Swaps up to a maximum amount of input tokens (amountInMax) to receive an exact amount of output tokens (amountOut),
+    //along the specified swap path. The user receives only the final output token.
+    //The function returns an array of actual amounts used at each hop.
+    //deadline is a transaction expiry time (Unix timestamp). e.g. deadline = block.timestamp + 300; // valid for 5 minutes
     function test_swapTokensForExactTokens() public {
         address[] memory path = new address[](3);
         path[0] = constants.WETH;
@@ -105,20 +120,34 @@ contract UniswapV2SwapTest is Test {
         assertEq(mkr.balanceOf(user), amountOut, "MKR balance of User");
     }
     function test_createPair() public {
-        //create pair (test token and weth)
+        //Deploy a new ERC20 TestToken with an initial supply of 1e18.
         TestToken token = new TestToken(1e18);
+        //Call Uniswap V2 Factory to create a new liquidity pair.
+        //Deploy a new UniswapV2Pair contract if it doesn’t already exist.
+        //The pair address is deterministic (based on token addresses).
+        //Token order does not matter.
         address pair = factory.createPair(address(token), constants.WETH);
+
+        //Read the two tokens stored in the pair contract.
         address token0 = IUniswapV2Pair(pair).token0();
         address token1 = IUniswapV2Pair(pair).token1();
+
+        //verification test
         bool hasTestToken = token0 == address(token) ||
             token1 == address(token);
         bool hasWETH = token0 == constants.WETH || token1 == constants.WETH;
         assertTrue(hasTestToken);
         assertTrue(hasWETH);
     }
+    //addLiquidity(): contribute both tokens to the pool
+    //arguments:
+    //amountADesired, amountBDesired: Maximum amounts you are willing to deposit; Router uses some or all to preserve pool ratio.
+    //amountAMin, amountBMin: Minimum amounts you are willing to actually deposit
+    //to: address that receives LP tokens; can be msg.sender or any other address
+    //function returns the actual amounts deposited and the LP tokens minted.
     function test_addLiquidity() public {
         vm.prank(user);
-        (uint amountA, uint amountB, uint liquidity) = router.addLiqudity({
+        (uint amountA, uint amountB, uint liquidity) = router.addLiquidity({
             tokenA: constants.DAI,
             tokenB: constants.WETH,
             amountADesired: 1e6 * 1e18,
@@ -133,11 +162,14 @@ contract UniswapV2SwapTest is Test {
         console2.log("WETH", amountB);
         console2.log("LP", liquidity);
 
+        address pairAddress = factory.getPair(constants.DAI, constants.WETH);
+        IUniswapV2Pair pair = IUniswapV2Pair(pairAddress);
+
         assertGt(pair.balanceOf(user), 0, "LP = 0");
     }
     function test_removeLiquidity() public {
         vm.startPrank(user);
-        (, , uint liquidity) = router.addLiqudity({
+        (, , uint liquidity) = router.addLiquidity({
             tokenA: constants.DAI,
             tokenB: constants.WETH,
             amountADesired: 1e6 * 1e18,
@@ -148,8 +180,15 @@ contract UniswapV2SwapTest is Test {
             deadline: block.timestamp
         });
 
+        address pairAddress = factory.getPair(constants.DAI, constants.WETH);
+        IUniswapV2Pair pair = IUniswapV2Pair(pairAddress);
+
+        //remove liquidity logic starts here: approve router to spend LP tokens of user; call removeLiquidity()
         pair.approve(address(router), liquidity);
 
+        //the LP tokens are burned by the pair contract,
+        //and both underlying tokens are transferred back to the user,
+        //while the user’s LP balance is reduced accordingly.
         (uint amountA, uint amountB) = router.removeLiquidity({
             tokenA: constants.DAI,
             tokenB: constants.WETH,
