@@ -15,6 +15,7 @@ import {
 import {
     IUniswapV2Pair
 } from "@uniswapCore/contracts/interfaces/IUniswapV2Pair.sol";
+import {UniswapV2FlashSwap} from "../src/UniswapV2FlashSwap.sol";
 
 contract UniswapV2SwapTest is Test {
     IWETH private constant weth = IWETH(constants.WETH);
@@ -24,9 +25,12 @@ contract UniswapV2SwapTest is Test {
         IUniswapV2Router02(constants.UNISWAP_V2_ROUTER_02);
     IUniswapV2Factory private constant factory =
         IUniswapV2Factory(constants.UNISWAP_V2_FACTORY);
+
     address private constant user = address(100);
+    UniswapV2FlashSwap flashSwap;
 
     function setUp() public {
+        //////////// LOGIC FOR ADD LIQUIDITY ///////////////
         //give 100 eth to user
         deal(user, 100 * 1e18);
         vm.startPrank(user);
@@ -42,11 +46,17 @@ contract UniswapV2SwapTest is Test {
         //aprove router to spend upto max dai from user
         dai.approve(address(router), type(uint256).max);
         vm.stopPrank();
+
+        /////////////// LOGIC FOR FLASH LOAN ////////////////////
+        flashSwap = new UniswapV2FlashSwap(constants.UNISWAP_V2_PAIR_DAI_WETH);
+        deal(constants.DAI, user, 10000 * 1e18);
+        vm.prank(user);
+        dai.approve(address(flashSwap), type(uint256).max);
     }
     // getAmountsOut() returns the estimated output token amounts for a given input token amount and swap path,
     // based on the current Uniswap V2 pool reserves.
     // The last value in the returned array is the final output amount.
-    function test_getAmountsOut() public {
+    function test_getAmountsOut() public view {
         address[] memory path = new address[](3);
         path[0] = constants.WETH;
         path[1] = constants.DAI;
@@ -60,7 +70,7 @@ contract UniswapV2SwapTest is Test {
     // getAmountsIn() returns the estimated input token amounts needed for a given output token amount and swap path,
     // based on the current Uniswap V2 pool reserves.
     // The first value in the returned array is the required input amount.
-    function test_getAmountsIn() public {
+    function test_getAmountsIn() public view {
         address[] memory path = new address[](3);
         path[0] = constants.WETH;
         path[1] = constants.DAI;
@@ -163,6 +173,7 @@ contract UniswapV2SwapTest is Test {
         console2.log("LP", liquidity);
 
         address pairAddress = factory.getPair(constants.DAI, constants.WETH);
+        //console2.log("DAI WETH pair address: ", pairAddress);
         IUniswapV2Pair pair = IUniswapV2Pair(pairAddress);
 
         assertGt(pair.balanceOf(user), 0, "LP = 0");
@@ -204,6 +215,15 @@ contract UniswapV2SwapTest is Test {
         console2.log("WETH", amountB);
 
         assertEq(pair.balanceOf(user), 0, "LP not 0");
+    }
+    function test_flashSwap() public {
+        uint256 dai0 = dai.balanceOf(constants.UNISWAP_V2_PAIR_DAI_WETH);
+        vm.prank(user);
+        flashSwap.flashSwap(constants.DAI, 1e6 * 1e18);
+        uint256 dai1 = dai.balanceOf(constants.UNISWAP_V2_PAIR_DAI_WETH);
+
+        console2.log("DAI fee", dai1 - dai0);
+        assertGe(dai1, dai0, "DAI balance of pair");
     }
 }
 
